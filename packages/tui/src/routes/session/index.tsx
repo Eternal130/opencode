@@ -163,6 +163,8 @@ export function Session(props: {
   const promptRef = usePromptRef()
   const session = createMemo(() => data.session.get(route.sessionID))
   const messages = () => data.session.message.list(route.sessionID)
+  // A subagent view has no prompt; backgrounding there releases the parent session blocked on it.
+  const backgroundSessionID = () => session()?.parentID ?? route.sessionID
   const messageIndexes = createMemo(() => new Map(messages().map((message, index) => [message.id, index])))
   const legacy = createMemo(() => legacyTurns(messages()))
   const messagesBeforeRevert = () => {
@@ -318,6 +320,12 @@ export function Session(props: {
       )
     }),
   )
+
+  createEffect(() => {
+    const parentID = session()?.parentID
+    if (!parentID || client.connection.status() !== "connected") return
+    void data.session.message.sync(parentID).catch(() => undefined)
+  })
 
   createEffect(() => {
     if (client.connection.status() !== "connected") return
@@ -1248,7 +1256,7 @@ export function Session(props: {
       group: "Session",
       palette: undefined,
       run: () => {
-        void client.api.session.background({ sessionID: route.sessionID })
+        void client.api.session.background({ sessionID: backgroundSessionID() })
         dialog.clear()
       },
     },
@@ -1312,6 +1320,12 @@ export function Session(props: {
 
   Keymap.createLayer(() => ({
     bindings: [...baseAndUnfocusedCommands, ...baseCommands()].map((command) => command.id),
+  }))
+
+  // The composer stays open in subagent views, so the background hint must stay reachable in its mode.
+  Keymap.createLayer(() => ({
+    mode: "composer",
+    bindings: ["session.background"],
   }))
 
   createEffect(
@@ -1409,7 +1423,7 @@ export function Session(props: {
                     />
                   )}
                 </For>
-                <BackgroundToolHint messages={messages()} />
+                <BackgroundToolHint messages={data.session.message.list(backgroundSessionID())} />
                 <Show when={session()?.revert?.messageID}>
                   <RevertMessage
                     count={messagesFromRevert().filter((message) => message.type === "user").length}
